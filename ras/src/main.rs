@@ -19,7 +19,7 @@ fn serialize_audio(samples: &AudioSample) -> Vec<u8> {
 fn send_audio_data(samples: &AudioSample, mut stream: &TcpStream) -> std::io::Result<()> {
     let serialized_data = serialize_audio(samples);
     let mut writer = BufWriter::new(&mut stream);
-    writer.write_all(&serialized_data)?;
+    writer.write_all(&samples.to_be_bytes())?;
     Ok(())
 }
 

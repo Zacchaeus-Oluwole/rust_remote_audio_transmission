@@ -15,9 +15,9 @@ type AudioSample = f32;
 fn receive_audio_data(mut stream: TcpStream) -> std::io::Result<AudioSample> {
     let mut reader = BufReader::new(&mut stream);
     let mut buf = [0; 4];
-    reader.read_exact(&mut buf)?;
-    let restored_float: f32 = unsafe { std::mem::transmute::<[u8; 4], f32>(buf) };
-    Ok(restored_float)
+    reader.read(&mut buf)?;
+    // let restored_float: f32 = unsafe { std::mem::transmute::<[u8; 4], f32>(buf) };
+    Ok(f32::from_be_bytes(buf))
 }
 
 #[derive(Parser, Debug)]
@@ -43,13 +43,14 @@ fn main() -> anyhow::Result<()> {
     let stream = TcpStream::connect("localhost:1234")?;
     
     // Output section
-    let _output_stream = setup_output(&opt, stream)?;
+    let output_stream = setup_output(&opt, stream)?;
 
     // Play the streams.
     println!(
         "Starting the input and output streams with `{}` milliseconds of latency.",
         opt.latency
     );
+    output_stream.play()?;
     
     loop {}
 }
@@ -75,38 +76,41 @@ fn setup_output(opt: &Opt, stream: TcpStream) -> anyhow::Result<cpal::Stream> {
     let latency_frames = (opt.latency / 1_000.0) * config.sample_rate.0 as f32;
     let latency_samples = latency_frames as usize * config.channels as usize;
     let ring = HeapRb::<f32>::new(latency_samples * 2);
-    let (mut producer, mut _consumer) = ring.split();
+    let (mut producer, mut consumer) = ring.split();
 
     // Fill the delay buffer with 0.0.
     for _ in 0..latency_samples {
         producer.push(0.0).unwrap();
     }
-    let mut vec_value = Vec::<f32>::new();
+
+    // let mut vec_value = Vec::<f32>::new();
 
     // Output data callback function.
     let output_data_fn = move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
 
-        let received_samples = receive_audio_data(stream.try_clone().unwrap()).expect("Error: unable to receive audio data");
-        
-        // let mut vec_value = Vec::<f32>::new();
+        // let received_samples = receive_audio_data(stream.try_clone().unwrap()).expect("Error: unable to receive audio data");
+
         for sample in data {
 
-            let _ = vec_value.push(received_samples);
+            *sample = receive_audio_data(stream.try_clone().unwrap()).expect("Error: unable to receive audio data");
+
+            // let _ = producer.push(received_samples);
             
-            *sample = match &vec_value.pop() {
-                Some(s) => *s,
-                None => {
-                    // input_fell_behind = true;
-                    0.0
-                }
-            };
+            // *sample = match &consumer.pop() {
+            //     Some(s) => *s,
+            //     None => {
+            //         // input_fell_behind = true;
+            //         0.0
+            //     }
+            // };
             // println!("Sample data: {:?}", &sample);
         }
+
         // for sample in data {
 
-        //     let _ = producer.push(received_samples);
+        //     let _ = vec_value.push(received_samples);
             
-        //     *sample = match &consumer.pop() {
+        //     *sample = match &vec_value.pop() {
         //         Some(s) => *s,
         //         None => {
         //             // input_fell_behind = true;
@@ -115,6 +119,7 @@ fn setup_output(opt: &Opt, stream: TcpStream) -> anyhow::Result<cpal::Stream> {
         //     };
         //     // println!("Sample data: {:?}", &sample);
         // }
+        
     };
 
     // Build output stream.
@@ -124,7 +129,7 @@ fn setup_output(opt: &Opt, stream: TcpStream) -> anyhow::Result<cpal::Stream> {
     // );
     let output_stream = output_device.build_output_stream(&config, output_data_fn, err_fn, None)?;
     // println!("Successfully built output stream.");
-    output_stream.play()?;
+    // output_stream.play()?;
 
     Ok(output_stream)
 }
