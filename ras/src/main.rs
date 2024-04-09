@@ -1,11 +1,11 @@
-// ======================  THE SERVER SIDE OF THE REMOTE AUDIO TRANSMISSION ==================================
+// // ======================  THE SERVER SIDE OF THE REMOTE AUDIO TRANSMISSION ==================================
+// server.rs
 
 use clap::Parser;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use ringbuf::HeapRb;
-
-use std::net::TcpListener;
-use std::io::Write;
+use std::net::{TcpListener, TcpStream};
+use std::io::{Write, BufWriter};
 
 // Sample audio data type
 type AudioSample = f32;
@@ -16,11 +16,10 @@ fn serialize_audio(samples: &AudioSample) -> Vec<u8> {
 }
 
 // Function to send audio data over TCP
-fn send_audio_data(samples: &AudioSample) -> std::io::Result<()> {
-    let listener = TcpListener::bind("localhost:1234")?;
-    let (mut stream, _) = listener.accept()?;
-    let serialized_data = unsafe { std::slice::from_raw_parts(samples as *const f32 as *const u8, std::mem::size_of::<f32>()) };
-    stream.write_all(&serialized_data)?;
+fn send_audio_data(samples: &AudioSample, mut stream: &TcpStream) -> std::io::Result<()> {
+    let serialized_data = serialize_audio(samples);
+    let mut writer = BufWriter::new(&mut stream);
+    writer.write_all(&serialized_data)?;
     Ok(())
 }
 
@@ -38,27 +37,17 @@ struct Opt {
     /// Specify the delay between input and output
     #[arg(short, long, value_name = "DELAY_MS", default_value_t = 150.0)]
     latency: f32,
-
-    // /// Use the JACK host
-    // #[cfg(all(
-    //     any(
-    //         target_os = "linux",
-    //         target_os = "dragonfly",
-    //         target_os = "freebsd",
-    //         target_os = "netbsd"
-    //     ),
-    //     feature = "jack"
-    // ))]
-    // #[arg(short, long)]
-    // #[allow(dead_code)]
-    // jack: bool,
 }
 
 fn main() -> anyhow::Result<()> {
     let opt = Opt::parse();
 
+    // Establish TCP connection
+    let listener = TcpListener::bind("localhost:1234")?;
+    let (stream, _) = listener.accept()?;
+    
     // Input section
-    let input_stream = setup_input(&opt)?;
+    let input_stream = setup_input(&opt, stream)?;
     
     // Play the streams.
     println!(
@@ -66,11 +55,11 @@ fn main() -> anyhow::Result<()> {
         opt.latency
     );
     input_stream.play()?;
-    loop{
-    }
+    
+    loop {}
 }
 
-fn setup_input(opt: &Opt) -> anyhow::Result<cpal::Stream> {
+fn setup_input(opt: &Opt, stream: TcpStream) -> anyhow::Result<cpal::Stream> {
     let host = cpal::default_host();
 
     // Find input device.
@@ -91,7 +80,7 @@ fn setup_input(opt: &Opt) -> anyhow::Result<cpal::Stream> {
     let latency_frames = (opt.latency / 1_000.0) * config.sample_rate.0 as f32;
     let latency_samples = latency_frames as usize * config.channels as usize;
     let ring = HeapRb::<f32>::new(latency_samples * 2);
-    let (mut producer, mut _consumer) = ring.split();
+    let (mut producer, _) = ring.split();
 
     // Fill the delay buffer with 0.0.
     for _ in 0..latency_samples {
@@ -101,7 +90,7 @@ fn setup_input(opt: &Opt) -> anyhow::Result<cpal::Stream> {
     // Input data callback function.
     let input_data_fn = move |data: &[f32], _: &cpal::InputCallbackInfo| {
         for &sample in data {
-            let _ = send_audio_data(&sample);
+            let _ = send_audio_data(&sample, &stream);
         }
     };
 
